@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>vnotes</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%238ab4ff'/%3E%3Crect x='9' y='8' width='7' height='16' rx='1.5' fill='%230d0e11'/%3E%3Crect x='19' y='21' width='5' height='3' rx='1' fill='%230d0e11'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<main id="login" class="login" hidden>
+  <form id="loginForm" class="card" autocomplete="off">
+    <div class="brand"><span class="mark"></span>vnotes</div>
+    <p class="sub">Plain-text notes with vim keys, stored in a private GitHub repo.</p>
+
+    <label>Repository
+      <input id="fRepo" placeholder="owner/notes" spellcheck="false" required>
+    </label>
+    <label>Fine-grained token
+      <input id="fToken" type="password" placeholder="github_pat_…" spellcheck="false" required>
+    </label>
+    <div class="row">
+      <label>Branch <small>optional</small>
+        <input id="fBranch" placeholder="default" spellcheck="false">
+      </label>
+      <label>Folder <small>optional</small>
+        <input id="fFolder" placeholder="repo root" spellcheck="false">
+      </label>
+    </div>
+    <p class="fine">Token needs <b>Contents: Read and write</b> on that one repository. It is stored only in this browser.</p>
+
+    <div id="loginErr" class="err" role="alert"></div>
+    <button id="loginBtn" class="btn primary wide" type="submit">Connect</button>
+  </form>
+</main>
+
+<div id="app" hidden>
+  <aside id="side">
+    <div class="side-head">
+      <div class="brand small"><span class="mark"></span>vnotes</div>
+      <div class="icons">
+        <button id="btnNew" class="icon" title="New note">+</button>
+        <button id="btnRefresh" class="icon" title="Refresh list">↻</button>
+      </div>
+    </div>
+    <div id="repoLabel" class="repo"></div>
+    <ul id="fileList"></ul>
+    <div class="side-foot"><button id="btnLogout" class="link">Log out</button></div>
+  </aside>
+
+  <section id="main">
+    <header class="top">
+      <div class="title"><span id="fileName">No note open</span><span id="dirtyDot" class="dot" hidden title="Unsaved changes"></span></div>
+      <button id="btnSave" class="btn primary" disabled>Save <kbd>Ctrl S</kbd></button>
+    </header>
+
+    <div id="editor">
+      <div id="scroll"><div id="doc"></div></div>
+      <div id="empty" class="empty">
+        <div class="big">Pick a note or press <kbd>+</kbd></div>
+        <div>Type <kbd>:help</kbd> inside a note for the key list.</div>
+      </div>
+      <textarea id="sink" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="editor input"></textarea>
+    </div>
+
+    <footer class="status">
+      <span id="modeBadge" class="mode" data-mode="normal">NORMAL</span>
+      <span id="fileBadge" class="fbadge"></span>
+      <span id="msg" class="msg"></span>
+      <span id="pend" class="pend"></span>
+      <span id="pos" class="pos"></span>
+    </footer>
+  </section>
+</div>
+
+<dialog id="modal">
+  <h3 id="dlgTitle"></h3>
+  <div id="dlgBody"></div>
+  <div id="dlgBtns" class="btns"></div>
+</dialog>
+
+<script src="vim.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
