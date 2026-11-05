@@ -1,916 +1,522 @@
-const API_ROOT = "https://api.github.com";
-const DATA_PATH = ".daymark/todos.json";
-const TOKEN_KEY = "daymark.github.token";
-const REPO_KEY = "daymark.github.repo";
-const EMOJIS = ["✳", "☀", "🌱", "☕", "✦", "◒"];
-const SAVE_DEBOUNCE_MS = 3000;
-const SAVE_MAX_WAIT_MS = 15000;
+(() => {
+  'use strict';
 
-const $ = (selector) => document.querySelector(selector);
-const ui = {
-  connectScreen: $("#connect-screen"),
-  connectForm: $("#connect-form"),
-  token: $("#github-token"),
-  repo: $("#repo-name"),
-  remember: $("#remember-token"),
-  connectMessage: $("#connect-message"),
-  workspace: $("#workspace"),
-  listNav: $("#list-nav"),
-  listGrid: $("#list-grid"),
-  emptyLists: $("#empty-lists"),
-  listsView: $("#lists-view"),
-  tasksView: $("#tasks-view"),
-  taskView: $("#task-view"),
-  taskEditor: $("#task-editor"),
-  taskList: $("#task-list"),
-  newTask: $("#new-task-input"),
-  modalBackdrop: $("#modal-backdrop"),
-  modal: $("#modal"),
-  toast: $("#toast")
-};
+  const KEY = 'vnotes.cfg', LAST = 'vnotes.last';
+  const $ = s => document.querySelector(s);
+  const S = { cfg: null, files: [], current: null };
 
-const state = {
-  token: "",
-  repo: "",
-  owner: "",
-  repository: "",
-  username: "",
-  data: { lists: [] },
-  sha: null,
-  activeListId: null,
-  selectedTask: 0,
-  pendingKey: "",
-  toastTimer: null,
-  writeQueue: Promise.resolve(),
-  saveTimer: null,
-  maxSaveTimer: null,
-  pendingSave: null,
-  changeVersion: 0,
-  dirty: false,
-  editingTaskId: null,
-  searchQuery: "",
-  mode: "view"
-};
-
-function repoParts(repo) {
-  const parts = repo.trim().replace(/^https:\/\/github\.com\//i, "").replace(/\.git$/i, "").split("/");
-  if (parts.length !== 2 || !parts[0] || !parts[1] || /[?#\s]/.test(parts.join(""))) {
-    throw new Error("Enter a repository as owner/name, for example octocat/my-todos.");
-  }
-  return parts;
-}
-
-async function github(path, options = {}) {
-  const response = await fetch(`${API_ROOT}${path}`, {
-    ...options,
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${state.token}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...options.headers
-    }
+  const ed = VimEditor.createEditor({
+    onDirty: () => { updateHeader(); renderList(); },
+    onMessage: (t, k) => msg(t, k),
+    onEx,
+    onYank: t => { try { navigator.clipboard && navigator.clipboard.writeText(t).catch(() => {}); } catch {} },
   });
-  if (!response.ok) {
-    let message = `GitHub returned ${response.status}.`;
-    try {
-      const body = await response.json();
-      if (body.message) message = body.message;
-    } catch {
-      // Keep the status-based error when GitHub does not return JSON.
-    }
-    if (response.status === 401) message = "That token is not valid. Check it and try again.";
-    if (response.status === 403) message = "GitHub denied access. Check your token permissions and repository access.";
-    if (response.status === 404) message = "Repository not found, or this token cannot access it.";
-    const error = new Error(message);
-    error.status = response.status;
-    throw error;
+
+  // ---- elements ----------------------------------------------------------
+  const login = $('#login'), app = $('#app');
+  const fRepo = $('#fRepo'), fToken = $('#fToken'), fBranch = $('#fBranch'), fFolder = $('#fFolder');
+  const loginErr = $('#loginErr'), loginBtn = $('#loginBtn');
+  const fileList = $('#fileList'), repoLabel = $('#repoLabel');
+  const fileName = $('#fileName'), dirtyDot = $('#dirtyDot'), btnSave = $('#btnSave');
+  const editor = $('#editor'), scroll = $('#scroll'), doc = $('#doc'), sink = $('#sink'), emptyEl = $('#empty');
+  const modeBadge = $('#modeBadge'), fileBadge = $('#fileBadge'), msgEl = $('#msg'), posEl = $('#pos'), pendEl = $('#pend');
+  const dlg = $('#modal');
+
+  // ---- GitHub ------------------------------------------------------------
+  const enc = p => p.split('/').map(encodeURIComponent).join('/');
+  const repoPath = () => `/repos/${S.cfg.repo}`;
+  const contentsUrl = name => `${repoPath()}/contents/${enc([S.cfg.folder, name].filter(Boolean).join('/'))}`;
+  const refQ = () => `?ref=${encodeURIComponent(S.cfg.branch)}`;
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+
+  function b64enc(s) {
+    const bytes = new TextEncoder().encode(s);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
   }
-  return response.status === 204 ? null : response.json();
-}
-
-function encodeContent(value) {
-  const bytes = new TextEncoder().encode(JSON.stringify(value, null, 2));
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-function decodeContent(content) {
-  const binary = atob(content.replace(/\s/g, ""));
-  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-  return JSON.parse(new TextDecoder().decode(bytes));
-}
-
-async function loadData() {
-  try {
-    const file = await github(`/repos/${encodeURIComponent(state.owner)}/${encodeURIComponent(state.repository)}/contents/${DATA_PATH}`);
-    if (Array.isArray(file) || !file.content || !file.sha) throw new Error("The Daymark data file is not a valid JSON file.");
-    const data = decodeContent(file.content);
-    if (!data || !Array.isArray(data.lists)) throw new Error("The Daymark data file has an unsupported format.");
-    for (const list of data.lists) {
-      if (!Array.isArray(list.tasks)) throw new Error("A todo list in the Daymark data file has an unsupported format.");
-      for (const task of list.tasks) {
-        if (typeof task.description !== "string") task.description = "";
-      }
-    }
-    state.data = data;
-    state.sha = file.sha;
-  } catch (error) {
-    if (error.status !== 404) throw error;
-    state.data = { lists: [] };
-    state.sha = null;
+  function b64dec(b) {
+    const bin = atob(b.replace(/\s/g, ''));
+    return new TextDecoder().decode(Uint8Array.from(bin, ch => ch.charCodeAt(0)));
   }
-}
 
-function persistData() {
-  state.changeVersion += 1;
-  state.dirty = true;
-  const promise = new Promise((resolve) => {
-    if (!state.pendingSave) {
-      state.pendingSave = { waiters: [] };
-      state.maxSaveTimer = setTimeout(flushPendingSave, SAVE_MAX_WAIT_MS);
-    }
-    state.pendingSave.waiters.push(resolve);
-    clearTimeout(state.saveTimer);
-    state.saveTimer = setTimeout(flushPendingSave, SAVE_DEBOUNCE_MS);
-  });
-  setSyncStatus("Changes queued for GitHub", "pending");
-  return promise;
-}
-
-function flushPendingSave() {
-  const batch = state.pendingSave;
-  if (!batch) return;
-  clearTimeout(state.saveTimer);
-  clearTimeout(state.maxSaveTimer);
-  state.saveTimer = null;
-  state.maxSaveTimer = null;
-  state.pendingSave = null;
-
-  const save = state.writeQueue.then(async () => {
-    setSyncStatus("Saving…", "syncing");
-    const version = state.changeVersion;
-    const body = {
-      message: "Batch update todo lists with Daymark",
-      content: encodeContent(state.data),
-      ...(state.sha ? { sha: state.sha } : {})
-    };
-    const file = await github(`/repos/${encodeURIComponent(state.owner)}/${encodeURIComponent(state.repository)}/contents/${DATA_PATH}`, {
-      method: "PUT",
-      body: JSON.stringify(body)
+  async function gh(path, opts = {}, cfg = S.cfg) {
+    const res = await fetch('https://api.github.com' + path, {
+      ...opts,
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        Authorization: 'Bearer ' + cfg.token,
+        ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
+      },
     });
-    state.sha = file.content.sha;
-    state.dirty = state.changeVersion !== version;
-    render();
+    if (!res.ok) {
+      let m = res.statusText;
+      try { m = (await res.json()).message || m; } catch {}
+      const e = new Error(m); e.status = res.status; throw e;
+    }
+    return res.status === 204 ? null : res.json();
+  }
+
+  function explain(e) {
+    if (e instanceof TypeError) return 'Network error — could not reach GitHub.';
+    switch (e.status) {
+      case 401: return 'GitHub rejected the token (expired or revoked).';
+      case 403: return /rate limit/i.test(e.message) ? 'GitHub rate limit hit — try again in a bit.' : 'The token lacks permission — it needs Contents: Read and write.';
+      case 404: return 'Not found — check the repo name and the token’s repository access.';
+      case 409: case 422: return 'The file changed on GitHub since you opened it. Use :e! to reload it (your edits are discarded).';
+      default: return e.message || 'Something went wrong.';
+    }
+  }
+
+  // ---- messages / status -------------------------------------------------
+  let curMsg = null, msgTimer = 0;
+  function msg(text, kind = 'info') {
+    curMsg = { text, kind };
+    clearTimeout(msgTimer);
+    msgTimer = setTimeout(() => { curMsg = null; paintMsg(); }, kind === 'error' ? 6500 : 3500);
+    paintMsg();
+  }
+  function paintMsg() {
+    if (ed.mode === 'cmd') { msgEl.className = 'msg cmd'; msgEl.textContent = ed.cmdline(); }
+    else { msgEl.className = 'msg ' + (curMsg ? curMsg.kind : ''); msgEl.textContent = curMsg ? curMsg.text : ''; }
+  }
+
+  // ---- editor rendering --------------------------------------------------
+  const rows = [];
+  let hereRow = -1;
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const MODES = { normal: 'NORMAL', insert: 'INSERT', visual: 'VISUAL', vline: 'V-LINE', cmd: 'COMMAND' };
+
+  function mkRow(i) {
+    const el = document.createElement('div'); el.className = 'line'; el._i = i;
+    const ln = document.createElement('span'); ln.className = 'ln'; ln.textContent = i + 1;
+    const tx = document.createElement('span'); tx.className = 'tx';
+    el.append(ln, tx); doc.appendChild(el);
+    return { el, tx, s: null, k: null };
+  }
+
+  function lineHtml(s, i, sel, cur) {
+    let sa = -1, sb = -1;
+    if (sel && i >= sel.s.r && i <= sel.e.r) {
+      if (sel.linewise) { sa = 0; sb = s.length + 1; }
+      else { sa = i === sel.s.r ? sel.s.c : 0; sb = i === sel.e.r ? sel.e.c + 1 : s.length + 1; }
+    }
+    let out = '', rc = null, rt = '';
+    const flush = () => { if (rt) out += rc ? `<span class="${rc}">${esc(rt)}</span>` : esc(rt); rt = ''; };
+    for (let p = 0; p < s.length; p++) {
+      let k = (sa >= 0 && p >= sa && p < sb) ? 'sel' : '';
+      if (p === cur) k += ' cur';
+      k = k.trim();
+      if (k !== rc) { flush(); rc = k; }
+      rt += s[p];
+    }
+    flush();
+    let k = '';
+    if (sa >= 0 && sb > s.length) k = 'sel';
+    if (cur >= 0 && cur >= s.length) k += ' cur';
+    k = k.trim();
+    if (k) out += `<span class="${k}">&nbsp;</span>`;
+    return out;
+  }
+
+  function render() {
+    const lines = ed.lines, sel = ed.selection(), r = ed.r, c = ed.c;
+    while (rows.length < lines.length) rows.push(mkRow(rows.length));
+    while (rows.length > lines.length) rows.pop().el.remove();
+    for (let i = 0; i < lines.length; i++) {
+      const cur = i === r ? c : -1;
+      let sa = -1, sb = -1;
+      if (sel && i >= sel.s.r && i <= sel.e.r) { sa = sel.linewise ? 0 : (i === sel.s.r ? sel.s.c : 0); sb = sel.linewise || i !== sel.e.r ? lines[i].length + 1 : sel.e.c + 1; }
+      const k = `${sa},${sb},${cur}`, row = rows[i];
+      if (row.s === lines[i] && row.k === k) continue;
+      row.tx.innerHTML = lineHtml(lines[i], i, sel, cur);
+      row.s = lines[i]; row.k = k;
+    }
+    if (hereRow !== r) {
+      if (rows[hereRow]) rows[hereRow].el.classList.remove('here');
+      rows[r].el.classList.add('here'); hereRow = r;
+    }
+    editor.className = 'mode-' + ed.mode;
+    modeBadge.textContent = MODES[ed.mode]; modeBadge.dataset.mode = ed.mode;
+    posEl.textContent = `${r + 1}:${c + 1}`;
+    pendEl.textContent = ed.pending();
+    paintMsg();
+    ensureVisible();
+  }
+
+  function ensureVisible() {
+    const row = rows[ed.r]; if (!row) return;
+    const top = row.el.offsetTop, bot = top + row.el.offsetHeight, pad = 48;
+    if (top < scroll.scrollTop + pad) scroll.scrollTop = Math.max(0, top - pad);
+    else if (bot > scroll.scrollTop + scroll.clientHeight - pad) scroll.scrollTop = bot - scroll.clientHeight + pad;
+  }
+
+  function resetRows() { rows.length = 0; doc.replaceChildren(); hereRow = -1; }
+
+  function updateHeader() {
+    const f = S.current;
+    fileName.textContent = f ? f.name : 'No note open';
+    dirtyDot.hidden = !(f && ed.dirty);
+    fileBadge.textContent = f ? f.name + (ed.dirty ? ' [+]' : '') : '';
+    emptyEl.hidden = !!f;
+    doc.hidden = !f;
+    btnSave.disabled = !f;
+    document.title = (f ? (ed.dirty ? '● ' : '') + f.name + ' — ' : '') + 'vnotes';
+  }
+
+  // ---- input -------------------------------------------------------------
+  const NAMED = new Set(['Enter', 'Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown']);
+
+  sink.addEventListener('keydown', e => {
+    if (e.isComposing || e.key === 'Dead' || e.key === 'Process') return;
+    const mod = (e.ctrlKey && !e.altKey) || e.metaKey;
+    let k = e.key;
+    if (mod) {
+      const l = k.toLowerCase();
+      if (l === 's') { e.preventDefault(); save(); return; }
+      if (e.metaKey || !S.current) return;
+      if (l === '[') k = 'Esc';
+      else if (l.length === 1 && 'rdu'.includes(l)) k = 'C-' + l;
+      else return;
+    } else if (k === 'Escape') k = 'Esc';
+    else if (k.length > 1 && !NAMED.has(k)) return;
+    if (!S.current) return;
+    e.preventDefault();
+    ed.key(k); render();
+  });
+  sink.addEventListener('input', () => {
+    const v = sink.value; sink.value = '';
+    if (v && S.current && ed.mode === 'insert') { ed.insertText(v); render(); }
+  });
+  sink.addEventListener('paste', e => {
+    e.preventDefault();
+    if (!S.current) return;
+    ed.paste(e.clipboardData.getData('text') || ''); render();
+  });
+
+  function colAt(x, y, tx) {
+    let node, off;
+    if (document.caretPositionFromPoint) { const p = document.caretPositionFromPoint(x, y); if (p) { node = p.offsetNode; off = p.offset; } }
+    else if (document.caretRangeFromPoint) { const g = document.caretRangeFromPoint(x, y); if (g) { node = g.startContainer; off = g.startOffset; } }
+    if (!node || !tx.contains(node)) return null;
+    const rg = document.createRange(); rg.selectNodeContents(tx); rg.setEnd(node, off);
+    return rg.toString().length;
+  }
+  scroll.addEventListener('mousedown', e => {
+    if (!S.current) return;
+    e.preventDefault(); focusEditor();
+    const lineEl = e.target.closest('.line');
+    if (!lineEl) { ed.setCursor(rows.length - 1, Infinity); render(); return; }
+    const tx = lineEl.querySelector('.tx');
+    const col = e.target.closest('.ln') ? 0 : colAt(e.clientX, e.clientY, tx);
+    ed.setCursor(lineEl._i, col == null ? Infinity : col); render();
+  });
+  const focusEditor = () => { if (S.current) sink.focus({ preventScroll: true }); };
+
+  window.addEventListener('beforeunload', e => { if (S.current && ed.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+  // ---- dialog ------------------------------------------------------------
+  function ask({ title, text, content, buttons }) {
+    return new Promise(res => {
+      $('#dlgTitle').textContent = title;
+      const body = $('#dlgBody'); body.replaceChildren();
+      if (text) { const p = document.createElement('p'); p.textContent = text; body.append(p); }
+      if (content) body.append(content);
+      const bar = $('#dlgBtns'); bar.replaceChildren();
+      buttons.forEach(b => {
+        const bt = document.createElement('button');
+        bt.className = 'btn ' + (b.cls || ''); bt.textContent = b.label;
+        bt.addEventListener('click', () => dlg.close(b.value));
+        bar.append(bt);
+      });
+      dlg.returnValue = 'cancel';
+      dlg.addEventListener('close', () => { res(dlg.returnValue); focusEditor(); }, { once: true });
+      dlg.showModal();
+      const prim = bar.querySelector('.primary, .danger') || bar.lastChild; prim && prim.focus();
+    });
+  }
+
+  const HELP = [
+    ['h j k l', 'move (arrow keys too)'], ['w b e', 'word forward / back / end'],
+    ['0 ^ $', 'line start / first char / end'], ['gg G  12G', 'top / bottom / line 12'],
+    ['{ }', 'previous / next blank line'], ['Ctrl-d  Ctrl-u', 'half page down / up'],
+    ['i a I A o O', 'enter insert mode (Esc leaves)'], ['x X D C s S', 'delete / change shortcuts'],
+    ['d y c + motion', 'dw  d$  yy  cw  ciw  3dd …'], ['p P', 'paste after / before'],
+    ['u  Ctrl-r', 'undo / redo'], ['J  r', 'join lines / replace char'],
+    ['v V', 'visual char / line, then d y c'], ['/text  n N', 'search'],
+    [':w :q :wq :q! :e!', 'save / close / save+close / discard+close / reload'],
+    [':12', 'jump to line 12'], ['Ctrl-s', 'save, from any mode'],
+  ];
+  function showHelp() {
+    const g = document.createElement('div'); g.className = 'keys';
+    HELP.forEach(([k, d]) => {
+      const a = document.createElement('code'); a.textContent = k;
+      const b = document.createElement('span'); b.textContent = d;
+      g.append(a, b);
+    });
+    ask({ title: 'Keys', content: g, buttons: [{ label: 'Close', value: 'ok', cls: 'primary' }] });
+  }
+
+  // ---- notes -------------------------------------------------------------
+  let loadId = 0, saving = false;
+
+  function renderList() {
+    fileList.replaceChildren();
+    if (!S.files.length) {
+      const li = document.createElement('li'); li.className = 'hint'; li.textContent = 'No .txt notes yet';
+      fileList.append(li); return;
+    }
+    for (const f of S.files) {
+      const li = document.createElement('li');
+      li.className = 'item' + (f === S.current ? ' active' : '');
+      const m = f.name.match(/^(.*?)(\.txt)$/i);
+      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = m ? m[1] : f.name;
+      if (m) { const x = document.createElement('span'); x.className = 'ext'; x.textContent = m[2]; nm.append(x); }
+      li.append(nm);
+      if (f.isNew) { const t = document.createElement('span'); t.className = 'tag'; t.textContent = 'new'; li.append(t); }
+      if (f === S.current && ed.dirty) { const d = document.createElement('span'); d.className = 'dot'; li.append(d); }
+      const del = document.createElement('button'); del.className = 'del'; del.title = 'Delete'; del.textContent = '×';
+      del.addEventListener('click', e => { e.stopPropagation(); deleteNote(f); });
+      li.append(del);
+      li.addEventListener('click', () => openFile(f));
+      fileList.append(li);
+    }
+  }
+
+  async function loadList() {
+    const dir = S.cfg.folder ? '/' + enc(S.cfg.folder) : '';
+    let items = [];
+    try { items = await gh(`${repoPath()}/contents${dir}${refQ()}`); }
+    catch (e) { if (e.status !== 404) throw e; }
+    const remote = (Array.isArray(items) ? items : []).filter(i => i.type === 'file' && /\.txt$/i.test(i.name));
+    const old = new Map(S.files.map(f => [f.name, f]));
+    let reloadCur = false;
+    const next = remote.map(i => {
+      const f = old.get(i.name);
+      if (!f) return { name: i.name, sha: i.sha, content: null, isNew: false };
+      if (f.sha !== i.sha) {
+        if (f !== S.current) { f.sha = i.sha; f.content = null; }
+        else if (!ed.dirty) { f.sha = i.sha; f.content = null; reloadCur = true; }
+      }
+      return f;
+    });
+    S.files.filter(f => f.isNew).forEach(f => next.push(f));
+    next.sort(byName);
+    S.files = next;
+    renderList();
+    if (reloadCur) await showFile(S.current);
+  }
+
+  async function fetchFile(f) {
+    const d = await gh(contentsUrl(f.name) + refQ());
+    if (d.encoding !== 'base64') throw new Error('This file is too large to open here (over 1 MB).');
+    f.sha = d.sha; f.content = b64dec(d.content);
+  }
+
+  async function showFile(f) {
+    const id = ++loadId;
+    S.current = f; renderList(); updateHeader();
+    if (f.content === null) {
+      try { msg('Loading…'); await fetchFile(f); }
+      catch (e) {
+        if (id !== loadId) return false;
+        S.current = null; ed.load(''); resetRows(); render(); renderList(); updateHeader();
+        msg(explain(e), 'error'); return false;
+      }
+      if (id !== loadId) return false;
+    }
+    ed.load(f.content);
+    try { localStorage.setItem(LAST, f.name); } catch {}
+    updateHeader(); renderList(); render(); focusEditor();
+    msg('');
     return true;
-  });
-  state.writeQueue = save.catch((error) => {
-    showToast(`Could not save to GitHub: ${error.message}`, true);
-    return false;
-  });
-  state.writeQueue.then((saved) => {
-    if (state.pendingSave || state.dirty) setSyncStatus("Changes queued for GitHub", "pending");
-    else setSyncStatus(saved ? "Synced with GitHub" : "Sync failed", saved ? "" : "error");
-    batch.waiters.forEach((resolve) => resolve(saved));
-  });
-  return state.writeQueue;
-}
-
-function setSyncStatus(label, status) {
-  $("#sync-label").textContent = label;
-  $("#saved-label").textContent = status === "syncing" ? "Saving changes…" : status === "pending" ? "Changes queued" : status === "error" ? "Could not sync" : "All changes saved";
-  $("#sync-indicator").className = `sync-indicator ${status}`;
-  $(".saved-dot").className = `saved-dot ${status}`;
-}
-
-function setConnectedScreen() {
-  ui.connectScreen.classList.add("hidden");
-  ui.workspace.classList.remove("hidden");
-  $("#repo-label").textContent = state.repo;
-  $("#top-repo-label").textContent = state.repo;
-  $("#user-label").textContent = state.username;
-  $("#user-avatar").textContent = (state.username[0] || "G").toUpperCase();
-  render();
-}
-
-async function connect(token, repo, remember) {
-  state.token = token.trim();
-  [state.owner, state.repository] = repoParts(repo);
-  state.repo = `${state.owner}/${state.repository}`;
-  const user = await github("/user");
-  state.username = user.login;
-  await github(`/repos/${encodeURIComponent(state.owner)}/${encodeURIComponent(state.repository)}`);
-  await loadData();
-  if (remember) {
-    localStorage.setItem(TOKEN_KEY, state.token);
-    localStorage.setItem(REPO_KEY, state.repo);
-  } else {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(REPO_KEY);
   }
-  setConnectedScreen();
-}
 
-function findList(id) {
-  return state.data.lists.find((list) => list.id === id);
-}
-
-function currentList() {
-  return findList(state.activeListId);
-}
-
-function showToast(message, isError = false) {
-  clearTimeout(state.toastTimer);
-  ui.toast.textContent = message;
-  ui.toast.className = `toast${isError ? " toast-error" : ""}`;
-  state.toastTimer = setTimeout(() => ui.toast.classList.add("hidden"), 2800);
-}
-
-function render() {
-  renderNavigation();
-  renderLists();
-  updateOverview();
-  if (state.activeListId && currentList()) renderTasks();
-}
-
-function renderNavigation() {
-  ui.listNav.replaceChildren();
-  for (const list of state.data.lists) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `list-nav-item${state.activeListId === list.id ? " active" : ""}`;
-    button.innerHTML = `<span class="nav-list-icon">${EMOJIS[list.emoji % EMOJIS.length]}</span><span class="nav-list-title"></span><span class="nav-list-count">${list.tasks.length}</span>`;
-    button.querySelector(".nav-list-title").textContent = list.title;
-    button.addEventListener("click", () => openList(list.id));
-    ui.listNav.append(button);
-  }
-}
-
-function renderLists() {
-  ui.listGrid.replaceChildren();
-  $("#list-count-label").textContent = `${state.data.lists.length} ${state.data.lists.length === 1 ? "list" : "lists"}`;
-  ui.emptyLists.classList.toggle("hidden", state.data.lists.length !== 0);
-  ui.listGrid.classList.toggle("hidden", state.data.lists.length === 0);
-  for (const [index, list] of state.data.lists.entries()) {
-    const done = list.tasks.filter((task) => task.completed).length;
-    const card = document.createElement("article");
-    card.className = "list-card";
-    card.tabIndex = 0;
-    card.setAttribute("role", "button");
-    card.setAttribute("aria-label", `Open ${list.title}`);
-    card.innerHTML = `<div class="list-card-top"><span class="list-emoji">${EMOJIS[list.emoji % EMOJIS.length]}</span><span class="list-card-menu">↗</span></div><h3></h3><div class="list-card-meta"><span class="list-card-count"></span><span class="mini-progress"><span></span></span></div>`;
-    card.querySelector("h3").textContent = list.title;
-    card.querySelector(".list-card-count").textContent = `${done} of ${list.tasks.length} done`;
-    card.querySelector(".mini-progress span").style.width = `${list.tasks.length ? (done / list.tasks.length) * 100 : 0}%`;
-    card.addEventListener("click", () => openList(list.id));
-    card.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        openList(list.id);
-      }
-    });
-    ui.listGrid.append(card);
-  }
-  if (state.activeListId) $("#top-list-label").textContent = currentList()?.title || "All lists";
-}
-
-function updateOverview() {
-  const tasks = state.data.lists.flatMap((list) => list.tasks);
-  $("#total-tasks").textContent = tasks.filter((task) => !task.completed).length;
-  $("#list-count").textContent = state.data.lists.length;
-}
-
-function openList(id) {
-  if (!findList(id)) return;
-  state.activeListId = id;
-  state.selectedTask = 0;
-  state.searchQuery = "";
-  state.mode = "view";
-  ui.listsView.classList.add("hidden");
-  ui.tasksView.classList.remove("hidden");
-  $("#top-list-label").textContent = currentList().title;
-  render();
-  closeMobileMenu();
-}
-
-function showAllLists() {
-  state.activeListId = null;
-  state.editingTaskId = null;
-  state.mode = "view";
-  ui.tasksView.classList.add("hidden");
-  ui.listsView.classList.remove("hidden");
-  $("#top-list-label").textContent = "All lists";
-  render();
-}
-
-function renderTasks() {
-  const list = currentList();
-  if (!list) return;
-  state.selectedTask = Math.max(0, Math.min(state.selectedTask, list.tasks.length - 1));
-  $("#task-list-title").textContent = list.title;
-  $("#terminal-list-title").textContent = `${list.title}.md`;
-  $("#top-list-label").textContent = list.title;
-  const done = list.tasks.filter((task) => task.completed).length;
-  $("#task-progress").textContent = `${done} of ${list.tasks.length} done`;
-  $("#progress-fill").style.width = `${list.tasks.length ? (done / list.tasks.length) * 100 : 0}%`;
-  $("#task-count-footer").textContent = `${list.tasks.length} ${list.tasks.length === 1 ? "task" : "tasks"}`;
-  ui.taskView.classList.toggle("hidden", state.mode !== "view");
-  ui.taskEditor.classList.toggle("hidden", state.mode !== "write");
-  $("#view-mode-button").classList.toggle("active", state.mode === "view");
-  $("#edit-mode-button").classList.toggle("active", state.mode === "write");
-  $("#view-mode-button").setAttribute("aria-pressed", String(state.mode === "view"));
-  $("#edit-mode-button").setAttribute("aria-pressed", String(state.mode === "write"));
-  renderTaskView(list);
-  if (state.mode !== "write") {
-    updateTerminalMode();
-    return;
-  }
-  ui.taskList.replaceChildren();
-  if (list.tasks.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "task-empty";
-    empty.textContent = "A fresh page. Add the first thing on your mind.";
-    ui.taskList.append(empty);
-  }
-  list.tasks.forEach((task, index) => {
-    const row = document.createElement("div");
-    row.className = `task-row${index === state.selectedTask ? " selected" : ""}${task.completed ? " completed" : ""}`;
-    row.tabIndex = -1;
-    row.setAttribute("role", "option");
-    row.setAttribute("aria-selected", index === state.selectedTask ? "true" : "false");
-    row.innerHTML = `<span class="line-number">${String(index + 2).padStart(2, "0")}</span><span class="task-check">${task.completed ? "✓" : ""}</span><span class="task-copy"><span class="task-text"></span><span class="task-description"></span></span><span class="task-row-hint"></span><span class="task-row-actions"><button class="task-action task-edit-button" type="button" aria-label="Edit task" title="Edit task">✎</button><button class="task-action task-up-button" type="button" aria-label="Move task up" title="Move task up">↑</button><button class="task-action task-down-button" type="button" aria-label="Move task down" title="Move task down">↓</button></span>`;
-    row.querySelector(".task-text").textContent = task.text;
-    row.querySelector(".task-description").textContent = task.description || "";
-    row.querySelector(".task-description").classList.toggle("hidden", !task.description);
-    row.querySelector(".task-edit-button").addEventListener("click", (event) => {
-      event.stopPropagation();
-      editTask(task);
-    });
-    row.querySelector(".task-up-button").addEventListener("click", (event) => {
-      event.stopPropagation();
-      moveTask(index, -1);
-    });
-    row.querySelector(".task-down-button").addEventListener("click", (event) => {
-      event.stopPropagation();
-      moveTask(index, 1);
-    });
-    row.addEventListener("click", () => {
-      state.selectedTask = index;
-      renderTasks();
-      ui.taskList.focus();
-    });
-    ui.taskList.append(row);
-    if (state.editingTaskId === task.id) beginInlineEdit(row, task);
-  });
-  const selected = ui.taskList.children[state.selectedTask];
-  if (selected && !state.editingTaskId) selected.scrollIntoView({ block: "nearest" });
-  updateTerminalMode();
-}
-
-function renderTaskView(list) {
-  const heading = document.createElement("div");
-  heading.className = "view-list-heading";
-  heading.innerHTML = `<span class="view-list-kicker">THE LIST</span><span class="view-list-count"></span>`;
-  heading.querySelector(".view-list-count").textContent = `${list.tasks.length} ${list.tasks.length === 1 ? "item" : "items"}`;
-  const rows = document.createElement("div");
-  rows.className = "view-task-list";
-  for (const task of list.tasks) {
-    const row = document.createElement("article");
-    row.className = `view-task-row${task.completed ? " completed" : ""}`;
-    row.innerHTML = `<button class="view-task-check" type="button" aria-label="${task.completed ? "Mark incomplete" : "Mark complete"}"></button><div class="view-task-copy"><span class="view-task-title"></span><span class="view-task-description"></span></div>`;
-    row.querySelector(".view-task-check").textContent = task.completed ? "✓" : "";
-    row.querySelector(".view-task-title").textContent = task.text;
-    const description = row.querySelector(".view-task-description");
-    description.textContent = task.description || "";
-    description.classList.toggle("hidden", !task.description);
-    row.querySelector(".view-task-check").addEventListener("click", () => toggleTask(task.id));
-    rows.append(row);
-  }
-  ui.taskView.replaceChildren(heading, rows);
-  if (list.tasks.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "view-empty";
-    empty.textContent = "Nothing on the list yet. Switch to Write when you’re ready to add something.";
-    rows.append(empty);
-  }
-}
-
-function updateTerminalMode() {
-  const terminalMode = $("#terminal-mode");
-  if (terminalMode) terminalMode.textContent = state.editingTaskId || document.activeElement === ui.newTask ? "INSERT" : "NORMAL";
-}
-
-function beginInlineEdit(row, task) {
-  const text = row.querySelector(".task-text");
-  const input = document.createElement("input");
-  input.className = "task-edit-input";
-  input.value = task.text;
-  input.setAttribute("aria-label", "Edit task");
-  text.replaceWith(input);
-  row.querySelector(".task-row-hint").textContent = "↵ save · esc cancel";
-  input.addEventListener("keydown", (event) => {
-    event.stopPropagation();
-    if (event.key === "Enter") {
-      event.preventDefault();
-      saveTaskEdit(task.id, input.value, true);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      if (task.draft && input.value.trim()) saveTaskEdit(task.id, input.value, true);
-      else {
-        if (task.draft) currentList().tasks = currentList().tasks.filter((item) => item.id !== task.id);
-        state.editingTaskId = null;
-        renderTasks();
-        ui.taskList.focus();
-      }
+  async function leaveCurrent() {
+    const f = S.current; if (!f) return true;
+    if (ed.dirty) {
+      const ch = await ask({
+        title: 'Unsaved changes',
+        text: `"${f.name}" has changes that haven't been saved to GitHub.`,
+        buttons: [{ label: 'Cancel', value: 'cancel' }, { label: 'Discard', value: 'discard', cls: 'danger' }, { label: 'Save', value: 'save', cls: 'primary' }],
+      });
+      if (ch === 'cancel') return false;
+      if (ch === 'save' && !(await save())) return false;
     }
-  });
-  input.addEventListener("blur", () => {
-    if (state.editingTaskId === task.id) saveTaskEdit(task.id, input.value);
-  });
-  input.focus();
-  input.select();
-  updateTerminalMode();
-}
-
-function saveTaskEdit(id, value, returnFocus = false) {
-  const task = currentList()?.tasks.find((item) => item.id === id);
-  state.editingTaskId = null;
-  if (task && value.trim()) {
-    task.text = value.trim();
-    delete task.draft;
-    persistData();
-  } else if (task?.draft) {
-    currentList().tasks = currentList().tasks.filter((item) => item.id !== id);
+    if (f.isNew) S.files = S.files.filter(x => x !== f);
+    return true;
   }
-  renderTasks();
-  updateTerminalMode();
-  if (returnFocus) ui.taskList.focus();
-}
 
-function addTask(text, index = null) {
-  const list = currentList();
-  const cleanText = text.trim();
-  if (!list || !cleanText) return;
-  const task = { id: crypto.randomUUID(), text: cleanText, description: "", completed: false };
-  if (index === null) list.tasks.push(task);
-  else list.tasks.splice(index, 0, task);
-  state.selectedTask = list.tasks.indexOf(task);
-  persistData();
-  renderTasks();
-}
-
-function editTask(task = currentList()?.tasks[state.selectedTask]) {
-  if (!task) return;
-  openTaskEditor(task);
-}
-
-function openTaskEditor(task) {
-  ui.modal.innerHTML = `<div class="modal-header"><h2 id="modal-title">Edit task</h2><button class="icon-button modal-close" type="button" aria-label="Close dialog">×</button></div><p class="modal-copy">Give this task a clear next step and any helpful context.</p><form><label for="task-title-input">Task</label><input id="task-title-input" type="text" maxlength="160" autocomplete="off" required><label for="task-description-input">Description <span class="label-note">optional</span></label><textarea id="task-description-input" rows="4" maxlength="1000" placeholder="Add a few details..."></textarea><p class="modal-error hidden" role="alert"></p><div class="modal-actions"><button class="button button-secondary modal-cancel" type="button">Cancel</button><button class="button button-primary" type="submit">Save task</button></div></form>`;
-  const title = $("#task-title-input");
-  const description = $("#task-description-input");
-  title.value = task.text;
-  description.value = task.description || "";
-  ui.modalBackdrop.classList.remove("hidden");
-  $(".modal-close").addEventListener("click", closeModal);
-  $(".modal-cancel").addEventListener("click", closeModal);
-  ui.modalBackdrop.addEventListener("click", modalBackdropClick);
-  ui.modal.querySelector("form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const nextTitle = title.value.trim();
-    if (!nextTitle) {
-      title.focus();
-      return;
-    }
-    const previous = { text: task.text, description: task.description || "", draft: task.draft };
-    task.text = nextTitle;
-    task.description = description.value.trim();
-    delete task.draft;
-    if (!await persistData()) {
-      Object.assign(task, previous);
-      renderTasks();
-      return;
-    }
-    renderTasks();
-    closeModal();
-  });
-  title.focus();
-  title.select();
-}
-
-function setMode(mode) {
-  if (mode !== "view" && mode !== "write") return;
-  if (state.mode === "write" && state.editingTaskId) {
-    const input = $(".task-edit-input");
-    if (input) saveTaskEdit(state.editingTaskId, input.value);
+  async function openFile(f) {
+    if (f === S.current) { focusEditor(); return true; }
+    if (!(await leaveCurrent())) return false;
+    return showFile(f);
   }
-  state.mode = mode;
-  state.pendingKey = "";
-  renderTasks();
-}
 
-function toggleTask(taskId = currentList()?.tasks[state.selectedTask]?.id) {
-  const task = currentList()?.tasks.find((item) => item.id === taskId);
-  if (!task) return;
-  task.completed = !task.completed;
-  state.selectedTask = currentList().tasks.indexOf(task);
-  persistData();
-  render();
-}
-
-function moveTask(index, direction) {
-  const list = currentList();
-  const destination = index + direction;
-  if (!list || destination < 0 || destination >= list.tasks.length) return;
-  [list.tasks[index], list.tasks[destination]] = [list.tasks[destination], list.tasks[index]];
-  state.selectedTask = destination;
-  persistData();
-  renderTasks();
-}
-
-function deleteSelectedTask() {
-  const list = currentList();
-  if (!list || !list.tasks[state.selectedTask]) return;
-  const [removed] = list.tasks.splice(state.selectedTask, 1);
-  state.selectedTask = Math.max(0, Math.min(state.selectedTask, list.tasks.length - 1));
-  persistData();
-  renderTasks();
-  showToast(`Removed “${removed.text}”`);
-}
-
-function openModal({ title, description = "", label = "", value = "", placeholder = "", submitText = "Save", destructiveAction = null, onSubmit }) {
-  ui.modal.innerHTML = `<div class="modal-header"><h2 id="modal-title"></h2><button class="icon-button modal-close" type="button" aria-label="Close dialog">×</button></div><p class="modal-copy"></p><form><label for="modal-input"></label><input id="modal-input" type="text" maxlength="80" autocomplete="off"><p class="modal-error hidden" role="alert"></p><div class="modal-actions">${destructiveAction ? '<button class="button button-danger modal-danger" type="button"></button>' : ""}<span class="modal-action-spacer"></span><button class="button button-secondary modal-cancel" type="button">Cancel</button><button class="button button-primary modal-submit" type="submit"></button></div></form>`;
-  $("#modal-title").textContent = title;
-  $(".modal-copy").textContent = description;
-  $(".modal-copy").classList.toggle("hidden", !description);
-  const input = $("#modal-input");
-  input.value = value;
-  input.placeholder = placeholder;
-  $("label[for='modal-input']").textContent = label;
-  $("label[for='modal-input']").classList.toggle("hidden", !label);
-  $(".modal-submit").textContent = submitText;
-  if (destructiveAction) {
-    $(".modal-danger").textContent = destructiveAction.label;
-    $(".modal-danger").addEventListener("click", destructiveAction.onClick);
+  function closeCurrent() {
+    const f = S.current; if (!f) return;
+    if (f.isNew) S.files = S.files.filter(x => x !== f);
+    S.current = null; ed.load(''); resetRows(); render();
+    try { localStorage.removeItem(LAST); } catch {}
+    updateHeader(); renderList();
   }
-  ui.modalBackdrop.classList.remove("hidden");
-  $(".modal-close").addEventListener("click", closeModal);
-  $(".modal-cancel").addEventListener("click", closeModal);
-  ui.modalBackdrop.addEventListener("click", modalBackdropClick);
-  ui.modal.querySelector("form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const error = $(".modal-error");
+
+  async function reloadCurrent() {
+    const f = S.current; if (!f) return;
+    if (f.isNew) { ed.load(''); render(); updateHeader(); return; }
+    f.content = null; await showFile(f);
+  }
+
+  async function save() {
+    const f = S.current; if (!f || saving) return false;
+    if (!ed.dirty && !f.isNew) { msg('Nothing to save'); return true; }
+    saving = true; btnSave.textContent = 'Saving…'; btnSave.disabled = true;
+    const snap = ed.snapshot();
     try {
-      const result = await onSubmit(input.value.trim());
-      if (result !== false) closeModal();
-    } catch (exception) {
-      error.textContent = exception.message;
-      error.classList.remove("hidden");
+      const body = { message: `${f.isNew ? 'Create' : 'Update'} ${f.name}`, content: b64enc(snap + '\n'), branch: S.cfg.branch };
+      if (f.sha) body.sha = f.sha;
+      const res = await gh(contentsUrl(f.name), { method: 'PUT', body: JSON.stringify(body) });
+      f.sha = res.content.sha; f.isNew = false; f.content = snap;
+      ed.markSaved(snap);
+      renderList(); updateHeader();
+      msg(`"${f.name}" ${snap.split('\n').length}L written`, 'ok');
+      return true;
+    } catch (e) {
+      msg(explain(e), 'error'); return false;
+    } finally {
+      saving = false; btnSave.innerHTML = 'Save <kbd>Ctrl S</kbd>'; btnSave.disabled = !S.current;
     }
-  });
-  input.focus();
-}
+  }
 
-function modalBackdropClick(event) {
-  if (event.target === ui.modalBackdrop) closeModal();
-}
+  async function createNote(raw) {
+    const base = raw.replace(/\.txt$/i, '').trim();
+    if (!base || /[\/\\:*?"<>|]/.test(base) || base.startsWith('.')) { msg('Invalid file name', 'error'); return; }
+    const name = base + '.txt';
+    if (S.files.some(f => f.name.toLowerCase() === name.toLowerCase())) { msg('A note with that name already exists', 'error'); return; }
+    const f = { name, sha: null, content: '', isNew: true };
+    S.files.push(f); S.files.sort(byName);
+    if (!(await openFile(f))) { S.files = S.files.filter(x => x !== f); renderList(); }
+  }
 
-function closeModal() {
-  ui.modalBackdrop.classList.add("hidden");
-  ui.modalBackdrop.removeEventListener("click", modalBackdropClick);
-}
-
-function createList() {
-  openModal({
-    title: "Give this list a name",
-    description: "Big plans, tiny errands, that idea you keep forgetting. It all belongs here.",
-    label: "List name",
-    placeholder: "e.g. Weekend little wins",
-    submitText: "Create list",
-    onSubmit: async (title) => {
-      if (!title) return false;
-      if (state.data.lists.some((list) => list.title.toLowerCase() === title.toLowerCase())) throw new Error("You already have a list with that name.");
-      const list = { id: crypto.randomUUID(), title, emoji: state.data.lists.length % EMOJIS.length, tasks: [] };
-      state.data.lists.push(list);
-      const saved = await persistData();
-      if (!saved) {
-        state.data.lists = state.data.lists.filter((item) => item.id !== list.id);
-        render();
-        return false;
-      }
-      openList(list.id);
-    }
-  });
-}
-
-function renameList() {
-  const list = currentList();
-  if (!list) return;
-  openModal({
-    title: "Rename your list",
-    description: "A good name makes it easier to find your focus.",
-    label: "List name",
-    value: list.title,
-    submitText: "Save name",
-    destructiveAction: {
-      label: "Delete list",
-      onClick: async () => {
-        if (!window.confirm(`Delete “${list.title}” and all its tasks? This cannot be undone.`)) return;
-        const index = state.data.lists.indexOf(list);
-        state.data.lists = state.data.lists.filter((item) => item.id !== list.id);
-        state.activeListId = null;
-        const saved = await persistData();
-        if (!saved) {
-          state.data.lists.splice(index, 0, list);
-          state.activeListId = list.id;
-          render();
-          return;
-        }
-        showAllLists();
-        closeModal();
-      }
-    },
-    onSubmit: async (title) => {
-      if (!title) return false;
-      if (title === list.title) return true;
-      if (state.data.lists.some((item) => item.id !== list.id && item.title.toLowerCase() === title.toLowerCase())) throw new Error("You already have a list with that name.");
-      const previousTitle = list.title;
-      list.title = title;
-      const saved = await persistData();
-      if (!saved) {
-        list.title = previousTitle;
-        render();
-        return false;
-      }
-      render();
-    }
-  });
-}
-
-async function shareList() {
-  const list = currentList();
-  if (!list) return;
-  const text = [
-    list.title,
-    ...list.tasks.map((task) => `${task.completed ? "[x]" : "[ ]"} ${task.text}${task.description ? `\n    ${task.description.replace(/\n/g, "\n    ")}` : ""}`)
-  ].join("\n");
-  if (navigator.share) {
+  async function deleteNote(f) {
+    const ch = await ask({
+      title: 'Delete note?',
+      text: f.isNew ? `"${f.name}" hasn't been saved yet and will be discarded.` : `"${f.name}" will be deleted from the repository.`,
+      buttons: [{ label: 'Cancel', value: 'cancel' }, { label: 'Delete', value: 'del', cls: 'danger' }],
+    });
+    if (ch !== 'del') return;
     try {
-      await navigator.share({ title: list.title, text });
-    } catch (error) {
-      if (error.name === "AbortError") return;
-      await copyShareText(text);
+      if (!f.isNew) await gh(contentsUrl(f.name), { method: 'DELETE', body: JSON.stringify({ message: `Delete ${f.name}`, sha: f.sha, branch: S.cfg.branch }) });
+      S.files = S.files.filter(x => x !== f);
+      if (S.current === f) { S.current = null; ed.load(''); resetRows(); try { localStorage.removeItem(LAST); } catch {} }
+      renderList(); updateHeader(); render();
+      msg(`"${f.name}" deleted`, 'ok');
+    } catch (e) { msg(explain(e), 'error'); }
+  }
+
+  function onEx(s) {
+    switch (s) {
+      case 'w': case 'write': save(); break;
+      case 'q': case 'quit': case 'close':
+        if (ed.dirty) msg('E37: No write since last change (add ! to override)', 'error'); else closeCurrent();
+        break;
+      case 'q!': closeCurrent(); break;
+      case 'wq': case 'x': save().then(ok => { if (ok) closeCurrent(); }); break;
+      case 'e!': reloadCurrent(); break;
+      case 'h': case 'help': showHelp(); break;
+      default: msg('E492: Not an editor command: ' + s, 'error');
     }
-    return;
   }
-  await copyShareText(text);
-}
 
-async function copyShareText(text) {
-  try {
-    if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
-    await navigator.clipboard.writeText(text);
-    showToast("Todo list copied as text.");
-  } catch {
-    ui.modal.innerHTML = `<div class="modal-header"><h2 id="modal-title">Share as text</h2><button class="icon-button modal-close" type="button" aria-label="Close dialog">×</button></div><p class="modal-copy">Copy this plain-text version of your list.</p><textarea class="share-text" aria-label="Todo list text" readonly></textarea><div class="modal-actions"><button class="button button-secondary modal-cancel" type="button">Close</button></div>`;
-    $(".share-text").value = text;
-    ui.modalBackdrop.classList.remove("hidden");
-    $(".modal-close").addEventListener("click", closeModal);
-    $(".modal-cancel").addEventListener("click", closeModal);
-    ui.modalBackdrop.addEventListener("click", modalBackdropClick);
-    $(".share-text").focus();
-    $(".share-text").select();
+  // ---- sidebar -----------------------------------------------------------
+  $('#btnNew').addEventListener('click', () => {
+    if (fileList.querySelector('.newrow')) return;
+    const li = document.createElement('li'); li.className = 'newrow';
+    const inp = document.createElement('input'); inp.placeholder = 'new-note.txt'; inp.spellcheck = false;
+    li.append(inp); fileList.prepend(li); inp.focus();
+    let done = false;
+    const finish = ok => {
+      if (done) return; done = true;
+      const v = inp.value.trim(); li.remove();
+      if (ok && v) createNote(v); else focusEditor();
+    };
+    inp.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') finish(false);
+    });
+    inp.addEventListener('blur', () => finish(false));
+  });
+  $('#btnRefresh').addEventListener('click', async () => {
+    try { await loadList(); msg('List refreshed', 'ok'); } catch (e) { msg(explain(e), 'error'); }
+    focusEditor();
+  });
+  btnSave.addEventListener('click', () => { save(); focusEditor(); });
+  $('#btnLogout').addEventListener('click', async () => {
+    if (!(await leaveCurrent())) return;
+    try { localStorage.removeItem(KEY); localStorage.removeItem(LAST); } catch {}
+    S.cfg = null; S.files = []; S.current = null; ed.load(''); resetRows();
+    fToken.value = ''; showLogin();
+  });
+
+  // ---- login -------------------------------------------------------------
+  function parseRepo(v) {
+    const p = v.trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').replace(/\/+$/, '').split('/');
+    return p.length === 2 && /^[\w.-]+$/.test(p[0]) && /^[\w.-]+$/.test(p[1]) ? p.join('/') : null;
   }
-}
+  function showLogin(err) {
+    app.hidden = true; login.hidden = false;
+    loginErr.textContent = err || '';
+    (fRepo.value ? fToken : fRepo).focus();
+  }
+  function showApp() {
+    login.hidden = true; app.hidden = false;
+    repoLabel.textContent = S.cfg.repo + (S.cfg.folder ? '/' + S.cfg.folder : '') + ' · ' + S.cfg.branch;
+    renderList(); updateHeader(); render();
+  }
 
-function showHelp() {
-  ui.modal.innerHTML = `<div class="modal-header"><h2 id="modal-title">Your keyboard, your flow.</h2><button class="icon-button modal-close" type="button" aria-label="Close dialog">×</button></div><p class="modal-copy">Vim-inspired shortcuts for moving through your list. Press <kbd>Esc</kbd> or <kbd>?</kbd> to close.</p><div class="help-list">${[
-    ["v / e", "Switch between View and Write modes"], ["j / ↓", "Move down"], ["k / ↑", "Move up"], ["gg", "Jump to the first task"], ["G", "Jump to the last task"], ["Enter / i", "Edit task title and description"], ["o", "Insert a task below and type its title"], ["a", "Focus the add-task field"], ["x", "Mark done / reopen"], ["Alt+j / Alt+k", "Move the selected task down / up"], ["dd", "Delete the selected task"], ["/", "Search tasks"], ["q", "Back to all lists"], ["Esc", "Save or cancel typing; close a dialog"], ["?", "Show this help"]
-  ].map(([key, description]) => `<div class="help-row"><kbd>${key}</kbd><span>${description}</span></div>`).join("")}</div><div class="modal-actions"><button class="button button-primary modal-close-action" type="button">Got it</button></div>`;
-  ui.modalBackdrop.classList.remove("hidden");
-  $(".modal-close").addEventListener("click", closeModal);
-  $(".modal-close-action").addEventListener("click", closeModal);
-  ui.modalBackdrop.addEventListener("click", modalBackdropClick);
-}
-
-function searchTasks() {
-  openModal({
-    title: "Find a task",
-    description: "Search within this list.",
-    label: "Search",
-    placeholder: "Type to find a task",
-    submitText: "Find",
-    onSubmit: async (query) => {
-      const list = currentList();
-      const index = list.tasks.findIndex((task) => task.text.toLowerCase().includes(query.toLowerCase()));
-      if (index < 0) throw new Error("No matching task in this list.");
-      state.selectedTask = index;
-      closeModal();
-      renderTasks();
+  $('#loginForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    loginErr.textContent = ''; loginBtn.disabled = true; loginBtn.textContent = 'Connecting…';
+    try {
+      const repo = parseRepo(fRepo.value);
+      if (!repo) throw new Error('Enter the repository as owner/name.');
+      const token = fToken.value.trim();
+      if (!token) throw new Error('Paste your fine-grained token.');
+      const cfg = { repo, token, branch: fBranch.value.trim(), folder: fFolder.value.trim().replace(/^\/+|\/+$/g, '') };
+      const info = await gh(`/repos/${repo}`, {}, cfg);
+      if (info.permissions && info.permissions.push === false) throw new Error('This token can only read the repository — give it Contents: Read and write.');
+      cfg.branch = cfg.branch || info.default_branch;
+      S.cfg = cfg; S.files = [];
+      showApp();
+      await loadList();
+      try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch {}
+    } catch (err) {
+      S.cfg = null;
+      showLogin(err.status || err instanceof TypeError ? explain(err) : err.message);
+    } finally {
+      loginBtn.disabled = false; loginBtn.textContent = 'Connect';
     }
   });
-}
 
-function handleEditorKeys(event) {
-  if (!state.activeListId || !ui.modalBackdrop.classList.contains("hidden")) return;
-  const list = currentList();
-  if (!list) return;
-  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-  if (event.key === "?") {
-    event.preventDefault();
-    showHelp();
-    return;
-  }
-  if (event.key === "Escape") {
-    state.pendingKey = "";
-    event.preventDefault();
-    return;
-  }
-  if (event.key === "q") {
-    showAllLists();
-    return;
-  }
-  if (event.key.toLowerCase() === "v") {
-    event.preventDefault();
-    setMode("view");
-    return;
-  }
-  if (event.key.toLowerCase() === "e") {
-    event.preventDefault();
-    setMode("write");
-    return;
-  }
-  if (state.mode !== "write") return;
-  if (event.altKey && (event.key === "j" || event.key === "ArrowDown")) {
-    event.preventDefault();
-    moveTask(state.selectedTask, 1);
-    return;
-  }
-  if (event.altKey && (event.key === "k" || event.key === "ArrowUp")) {
-    event.preventDefault();
-    moveTask(state.selectedTask, -1);
-    return;
-  }
-  if (event.key === "j" || event.key === "ArrowDown") {
-    event.preventDefault();
-    state.pendingKey = "";
-    state.selectedTask = Math.min(state.selectedTask + 1, Math.max(list.tasks.length - 1, 0));
-    renderTasks();
-    return;
-  }
-  if (event.key === "k" || event.key === "ArrowUp") {
-    event.preventDefault();
-    state.pendingKey = "";
-    state.selectedTask = Math.max(0, state.selectedTask - 1);
-    renderTasks();
-    return;
-  }
-  if (event.key === "g") {
-    event.preventDefault();
-    if (state.pendingKey === "g") {
-      state.selectedTask = 0;
-      state.pendingKey = "";
-      renderTasks();
-    } else state.pendingKey = "g";
-    return;
-  }
-  if (event.key === "G") {
-    event.preventDefault();
-    state.pendingKey = "";
-    state.selectedTask = Math.max(0, list.tasks.length - 1);
-    renderTasks();
-    return;
-  }
-  if (event.key === "d") {
-    event.preventDefault();
-    if (state.pendingKey === "d") {
-      state.pendingKey = "";
-      deleteSelectedTask();
-    } else state.pendingKey = "d";
-    return;
-  }
-  state.pendingKey = "";
-  if (event.key === "Enter") {
-    event.preventDefault();
-    editTask();
-  } else if (event.key === "i") {
-    event.preventDefault();
-    editTask();
-  } else if (event.key === "x") {
-    toggleTask();
-  } else if (event.key === "o") {
-    event.preventDefault();
-    const draft = { id: crypto.randomUUID(), text: "", description: "", completed: false, draft: true };
-    const insertAt = list.tasks.length ? Math.min(state.selectedTask + 1, list.tasks.length) : 0;
-    list.tasks.splice(insertAt, 0, draft);
-    state.selectedTask = insertAt;
-    state.editingTaskId = draft.id;
-    renderTasks();
-  } else if (event.key === "a") {
-    ui.newTask.focus();
-  } else if (event.key === "/") {
-    event.preventDefault();
-    searchTasks();
-  }
-}
-
-function closeMobileMenu() {
-  $("#sidebar").classList.remove("menu-open");
-  $("#mobile-backdrop").classList.add("hidden");
-}
-
-ui.connectForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  ui.connectMessage.textContent = "Connecting to GitHub…";
-  const button = ui.connectForm.querySelector("button[type='submit']");
-  button.disabled = true;
-  try {
-    await connect(ui.token.value, ui.repo.value, ui.remember.checked);
-  } catch (error) {
-    ui.connectMessage.textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-});
-
-$("#show-token").addEventListener("click", () => {
-  const visible = ui.token.type === "text";
-  ui.token.type = visible ? "password" : "text";
-  $("#show-token").textContent = visible ? "Show" : "Hide";
-  $("#show-token").setAttribute("aria-label", visible ? "Show token" : "Hide token");
-});
-
-$("#new-list-button").addEventListener("click", createList);
-$("#new-list-link").addEventListener("click", createList);
-$("#create-first-list").addEventListener("click", createList);
-$("#empty-create-list").addEventListener("click", createList);
-$("#back-to-lists").addEventListener("click", showAllLists);
-$("#share-list-button").addEventListener("click", shareList);
-$("#rename-list-button").addEventListener("click", renameList);
-$("#help-button").addEventListener("click", showHelp);
-$("#view-mode-button").addEventListener("click", () => setMode("view"));
-$("#edit-mode-button").addEventListener("click", () => setMode("write"));
-$("#add-task-form").addEventListener("submit", (event) => {
-  event.preventDefault();
-  if (!ui.newTask.value.trim()) return;
-  addTask(ui.newTask.value);
-  ui.newTask.value = "";
-  ui.newTask.blur();
-  ui.taskList.focus();
-  updateTerminalMode();
-});
-ui.newTask.addEventListener("focus", updateTerminalMode);
-ui.newTask.addEventListener("blur", updateTerminalMode);
-ui.newTask.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    ui.newTask.value = "";
-    ui.newTask.blur();
-    if (state.mode === "write" && currentList()?.tasks.length) {
-      state.selectedTask = Math.min(state.selectedTask, currentList().tasks.length - 1);
-      renderTasks();
-      ui.taskList.focus();
+  // ---- boot --------------------------------------------------------------
+  (async function boot() {
+    try { S.cfg = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { S.cfg = null; }
+    if (!S.cfg || !S.cfg.token || !S.cfg.repo) { S.cfg = null; showLogin(); return; }
+    fRepo.value = S.cfg.repo; fBranch.value = S.cfg.branch || ''; fFolder.value = S.cfg.folder || '';
+    showApp();
+    try {
+      await loadList();
+      const last = localStorage.getItem(LAST);
+      const f = S.files.find(x => x.name === last);
+      if (f) await showFile(f);
+    } catch (e) {
+      if (e.status === 401 || e.status === 403 || e.status === 404) {
+        try { localStorage.removeItem(KEY); } catch {}
+        S.cfg = null; showLogin(explain(e));
+      } else msg(explain(e), 'error');
     }
-  }
-});
-$("#disconnect-button").addEventListener("click", async () => {
-  if (!window.confirm("Disconnect from GitHub on this device? Your lists stay safely in the repository.")) return;
-  const button = $("#disconnect-button");
-  button.disabled = true;
-  while (state.dirty) {
-    if (!state.pendingSave) persistData();
-    if (!await flushPendingSave()) {
-      button.disabled = false;
-      return;
-    }
-  }
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(REPO_KEY);
-  location.href = location.pathname;
-});
-$("#mobile-menu").addEventListener("click", () => {
-  $("#sidebar").classList.toggle("menu-open");
-  $("#mobile-backdrop").classList.toggle("hidden");
-});
-$("#mobile-backdrop").addEventListener("click", closeMobileMenu);
-document.addEventListener("keydown", (event) => {
-  if (!ui.modalBackdrop.classList.contains("hidden")) {
-    if (event.key === "Escape") closeModal();
-    return;
-  }
-  handleEditorKeys(event);
-});
-window.addEventListener("beforeunload", (event) => {
-  if (!state.dirty) return;
-  event.preventDefault();
-  event.returnValue = "";
-});
-
-if (localStorage.getItem(TOKEN_KEY) && localStorage.getItem(REPO_KEY)) {
-  ui.token.value = localStorage.getItem(TOKEN_KEY);
-  ui.repo.value = localStorage.getItem(REPO_KEY);
-  connect(ui.token.value, ui.repo.value, true).catch((error) => {
-    ui.connectMessage.textContent = `Could not reconnect: ${error.message}`;
-    ui.token.value = "";
-  });
-}
+  })();
+})();

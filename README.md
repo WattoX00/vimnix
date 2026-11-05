@@ -1,29 +1,30 @@
-# Daymark
+# vnotes
 
-Daymark is a keyboard-first todo app hosted as a static site on GitHub Pages. Your lists are stored in `.daymark/todos.json` in a GitHub repository you choose; the app has no server or separate database.
+A tiny desktop-only notes site with vim keys. Notes are plain `.txt` files in a **private GitHub repo**; the site itself is static and runs on GitHub Pages. No server, no build step.
 
-## Publish on GitHub Pages
+## Setup
 
-The included Actions workflow publishes the site from the `main` branch. In your repository settings, choose **Pages → Build and deployment → GitHub Actions**. Push to `main` or run the **Deploy Daymark to GitHub Pages** workflow manually.
+1. **Notes repo (private).** Create e.g. `notes` and initialise it with a README so the branch exists.
+2. **Token.** GitHub → Settings → Developer settings → Fine-grained tokens → Generate.
+   Repository access: *Only select repositories* → your notes repo.
+   Permissions: **Contents: Read and write** (Metadata: read is added automatically).
+3. **Site repo.** Put `index.html`, `style.css`, `vim.js`, `app.js` in a repo (e.g. `vnotes`), then Settings → Pages → deploy from the `main` branch, `/ (root)`.
+   Pages on the free plan needs this repo to be public — that's fine, it holds no secrets; your notes live in the other, private repo.
+4. Open the site, enter `owner/notes` and the token. They are saved in this browser's localStorage, so you only do this once. *Log out* wipes them.
 
-## Connect a repository
+## How it behaves
 
-Create a fine-grained personal access token in GitHub and grant it access to the repository where your lists should live. Give it **Contents: Read and write** permission (GitHub's repository metadata permission is read-only and is selected automatically). Enter the token and repository as `owner/name` in Daymark.
+- Notes are saved to GitHub **only** when you save (`:w` or `Ctrl-S`). One API call per save, one per opened note (cached afterwards), one for the list.
+- Switching notes or logging out with unsaved changes asks: Save / Discard / Cancel.
+- Closing the tab with unsaved changes triggers the browser's own "Leave site?" prompt (browsers don't allow custom dialogs there).
+- If a note was changed on GitHub since you opened it, saving fails with a conflict message; `:e!` reloads it.
+- New notes exist locally until the first save. `Refresh` (↻) re-reads the list.
+- Optional **Folder** on the login form keeps notes in a subfolder of the repo.
 
-The app tests access to your GitHub account and repository before connecting. Choose **Remember me on this device** to save the token in this browser's local storage. The token is sent to GitHub's API and nowhere else. Anyone with access to this browser profile can use it, so avoid saving it on shared devices; disconnect to remove it from local storage, and revoke it from GitHub when no longer needed.
+## Keys
 
-Lists and tasks are saved in `.daymark/todos.json` in the selected repository. Daymark batches nearby edits into a single commit after a short pause, and syncs ongoing edits at least every 15 seconds. Commits are created under the connected GitHub account.
+Run `:help` in a note. Short version: `h j k l w b e 0 ^ $ gg G { }`, `i a I A o O`, `x X D C s S J r`, `d y c` + motion (`dw`, `d$`, `cw`, `ciw`, `3dd`, `yy`), `p P`, `u` / `Ctrl-r`, `v V` + `d y c`, `/text` `n N`, `:w :q :wq :q! :e! :12`.
 
-## Share a list
+## Security notes
 
-Use the share button in an open list to send a plain-text copy through your device's native share sheet, when available. Otherwise, Daymark copies the text to your clipboard. The shared text includes task completion and descriptions.
-
-## Keyboard shortcuts
-
-Open a list in View mode and press `e` to enter Write mode, or press `v` to return to View mode. These shortcuts also work when a list is selected from the list overview; lists open in View mode by default.
-
-In Write mode, press `j` / `k` or the arrow keys to move the selection, `gg` / `G` to jump to the first / last task, `Enter` or `i` to edit a task's title and description, `o` to insert a task below and type its title, `a` to focus the add-task field, `x` to toggle completion, `Alt+j` / `Alt+k` to reorder the selected task, `dd` to delete, `/` to search, and `q` to return to all lists. Press `Escape` to cancel a task being typed or close a dialog. Press `?` for the in-app shortcut guide.
-
-## Development
-
-This is a dependency-free static site. Open `index.html` in a browser or serve the project directory with any static file server. API access requires a valid GitHub token and repository.
+The token lives in localStorage, so use it only on your own machine and keep it scoped to the one notes repo with just Contents access. If it leaks, revoke it in GitHub settings.
