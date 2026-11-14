@@ -73,6 +73,21 @@ input::placeholder { color: var(--faint); }
 .link { color: var(--dim); font-size: 12px; padding: 4px 6px; border-radius: 6px; }
 .link:hover { color: var(--text); background: rgba(255,255,255,.05); }
 
+#app.no-side { grid-template-columns: 1fr; }
+#app.no-side #side { display: none; }
+#side.focus { box-shadow: inset 2px 0 0 var(--accent); }
+.item.cursor { background: rgba(255,255,255,.08); color: var(--text); outline: 1px solid rgba(138,180,255,.5); outline-offset: -1px; }
+.tree-hint { padding: 8px 14px; font-size: 11px; color: var(--faint); line-height: 1.9; border-top: 1px solid var(--line); }
+.tree-hint kbd { margin-right: 2px; }
+
+.picker { position: fixed; inset: 0; z-index: 50; display: flex; justify-content: center; align-items: flex-start; padding-top: 14vh; background: rgba(5,6,8,.55); backdrop-filter: blur(2px); }
+.pbox { width: min(520px, 92vw); background: var(--bg3); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 40px 100px rgba(0,0,0,.6); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+#pList { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+#pList li { padding: 7px 10px; border-radius: 8px; color: var(--dim); cursor: pointer; font: 13px var(--mono); }
+#pList li.sel { background: rgba(138,180,255,.14); color: var(--text); }
+#pList li.hint { cursor: default; font: 13px var(--sans); }
+.phint { padding: 2px 6px 0; font-size: 11px; color: var(--faint); }
+
 #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .top { height: 52px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; border-bottom: 1px solid var(--line); }
 .title { display: flex; align-items: center; gap: 10px; font-weight: 500; }

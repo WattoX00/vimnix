@@ -23,7 +23,14 @@ A tiny desktop-only notes site with vim keys. Notes are plain `.txt` files in a 
 
 ## Keys
 
-Run `:help` in a note. Short version: `h j k l w b e 0 ^ $ gg G { }`, `i a I A o O`, `x X D C s S J r`, `d y c` + motion (`dw`, `d$`, `cw`, `ciw`, `3dd`, `yy`), `p P`, `u` / `Ctrl-r`, `v V` + `d y c`, `/text` `n N`, `:w :q :wq :q! :e! :12`.
+Everything works from the keyboard, with or without a note open (`:help` lists the keys).
+
+- `Space Space` — fuzzy note picker (`↑↓` or `Ctrl-n/p`, `Enter` opens; if nothing matches, `Enter` creates that note).
+- `Space e` — show the sidebar and focus it; press again to hide it. The file list is cached in memory, so toggling never re-fetches (use ↻ to re-read it).
+- In the sidebar: `j k g G` move, `Enter` open, `a` new note, `d` delete, `Esc` back to the editor.
+- `:new name` / `:e name` create (or open) `name.txt`; `:ls` opens the picker.
+
+Editor keys, short version: `h j k l w b e 0 ^ $ gg G { }`, `i a I A o O`, `x X D C s S J r`, `d y c` + motion (`dw`, `d$`, `cw`, `ciw`, `3dd`, `yy`), `p P`, `u` / `Ctrl-r`, `v V` + `d y c`, `/text` `n N`, `:w :q :wq :q! :e! :12`.
 
 ## Security notes
 
