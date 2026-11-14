@@ -1,9 +1,11 @@
 (() => {
   'use strict';
 
-  const KEY = 'vnotes.cfg', LAST = 'vnotes.last';
+  const KEY = 'vnotes.cfg', LAST = 'vnotes.last', SIDE = 'vnotes.side';
   const $ = s => document.querySelector(s);
-  const S = { cfg: null, files: [], current: null };
+  // focus: 'editor' | 'tree' (which pane the keyboard drives); side: sidebar visible; sel: cursor in the tree
+  const S = { cfg: null, files: [], current: null, focus: 'editor', side: true, sel: 0 };
+  let leader = false, leaderTimer = 0;
 
   const ed = VimEditor.createEditor({
     onDirty: () => { updateHeader(); renderList(); },
@@ -20,7 +22,8 @@
   const fileName = $('#fileName'), dirtyDot = $('#dirtyDot'), btnSave = $('#btnSave');
   const editor = $('#editor'), scroll = $('#scroll'), doc = $('#doc'), sink = $('#sink'), emptyEl = $('#empty');
   const modeBadge = $('#modeBadge'), fileBadge = $('#fileBadge'), msgEl = $('#msg'), posEl = $('#pos'), pendEl = $('#pend');
-  const dlg = $('#modal');
+  const dlg = $('#modal'), side = $('#side'), treeHint = $('#treeHint');
+  const picker = $('#picker'), pInput = $('#pInput'), pList = $('#pList');
 
   // ---- GitHub ------------------------------------------------------------
   const enc = p => p.split('/').map(encodeURIComponent).join('/');
@@ -140,8 +143,8 @@
     }
     editor.className = 'mode-' + ed.mode;
     modeBadge.textContent = MODES[ed.mode]; modeBadge.dataset.mode = ed.mode;
-    posEl.textContent = `${r + 1}:${c + 1}`;
-    pendEl.textContent = ed.pending();
+    posEl.textContent = S.current ? `${r + 1}:${c + 1}` : '';
+    pendEl.textContent = leader ? 'SPC' : ed.pending();
     paintMsg();
     ensureVisible();
   }
@@ -176,16 +179,34 @@
     if (mod) {
       const l = k.toLowerCase();
       if (l === 's') { e.preventDefault(); save(); return; }
-      if (e.metaKey || !S.current) return;
+      if (e.metaKey) return;
       if (l === '[') k = 'Esc';
-      else if (l.length === 1 && 'rdu'.includes(l)) k = 'C-' + l;
+      else if (S.current && S.focus === 'editor' && l.length === 1 && 'rdu'.includes(l)) k = 'C-' + l;
       else return;
     } else if (k === 'Escape') k = 'Esc';
     else if (k.length > 1 && !NAMED.has(k)) return;
-    if (!S.current) return;
     e.preventDefault();
-    ed.key(k); render();
+    route(k);
   });
+
+  // Central key router: leader (Space) sequences, sidebar navigation, then the vim engine.
+  function route(k) {
+    const typing = ed.mode === 'cmd';
+    if (leader) {
+      endLeader();
+      if (k === ' ') openPicker();
+      else if (k === 'e') toggleSidebar();
+      render(); return;
+    }
+    if (!typing && k === ' ' && (S.focus === 'tree' || !S.current || (ed.mode === 'normal' && !ed.pending()))) {
+      leader = true; clearTimeout(leaderTimer); leaderTimer = setTimeout(() => { endLeader(); render(); }, 1500);
+      render(); return;
+    }
+    if (!typing && S.focus === 'tree') { treeKey(k); render(); return; }
+    if (!S.current && !typing && k !== ':') return;   // no note open: only the command line works
+    ed.key(k); render();
+  }
+  function endLeader() { leader = false; clearTimeout(leaderTimer); }
   sink.addEventListener('input', () => {
     const v = sink.value; sink.value = '';
     if (v && S.current && ed.mode === 'insert') { ed.insertText(v); render(); }
@@ -205,15 +226,16 @@
     return rg.toString().length;
   }
   scroll.addEventListener('mousedown', e => {
-    if (!S.current) return;
     e.preventDefault(); focusEditor();
+    if (!S.current) return;
+    if (S.focus !== 'editor') { S.focus = 'editor'; renderList(); }
     const lineEl = e.target.closest('.line');
     if (!lineEl) { ed.setCursor(rows.length - 1, Infinity); render(); return; }
     const tx = lineEl.querySelector('.tx');
     const col = e.target.closest('.ln') ? 0 : colAt(e.clientX, e.clientY, tx);
     ed.setCursor(lineEl._i, col == null ? Infinity : col); render();
   });
-  const focusEditor = () => { if (S.current) sink.focus({ preventScroll: true }); };
+  const focusEditor = () => { if (!app.hidden && picker.hidden) sink.focus({ preventScroll: true }); };
 
   window.addEventListener('beforeunload', e => { if (S.current && ed.dirty) { e.preventDefault(); e.returnValue = ''; } });
 
@@ -248,6 +270,12 @@
     ['v V', 'visual char / line, then d y c'], ['/text  n N', 'search'],
     [':w :q :wq :q! :e!', 'save / close / save+close / discard+close / reload'],
     [':12', 'jump to line 12'], ['Ctrl-s', 'save, from any mode'],
+    ['Space Space', 'find a note (fuzzy picker, Enter opens)'],
+    ['Space e', 'show sidebar and focus it / focus it / hide it'],
+    ['sidebar: j k g G', 'move (arrows too)'],
+    ['sidebar: Enter  a  d  Esc', 'open / new note / delete / back to editor'],
+    [':new name  :e name', 'create (or open) name.txt'],
+    [':ls  :logout', 'open picker / log out'],
   ];
   function showHelp() {
     const g = document.createElement('div'); g.className = 'keys';
@@ -264,13 +292,17 @@
 
   function renderList() {
     fileList.replaceChildren();
+    S.sel = Math.max(0, Math.min(S.sel, S.files.length - 1));
+    const inTree = S.focus === 'tree';
+    side.classList.toggle('focus', inTree);
+    treeHint.hidden = !inTree;
     if (!S.files.length) {
-      const li = document.createElement('li'); li.className = 'hint'; li.textContent = 'No .txt notes yet';
+      const li = document.createElement('li'); li.className = 'hint'; li.textContent = 'No .txt notes yet — press a to create one';
       fileList.append(li); return;
     }
     for (const f of S.files) {
       const li = document.createElement('li');
-      li.className = 'item' + (f === S.current ? ' active' : '');
+      li.className = 'item' + (f === S.current ? ' active' : '') + (inTree && f === S.files[S.sel] ? ' cursor' : '');
       const m = f.name.match(/^(.*?)(\.txt)$/i);
       const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = m ? m[1] : f.name;
       if (m) { const x = document.createElement('span'); x.className = 'ext'; x.textContent = m[2]; nm.append(x); }
@@ -283,6 +315,8 @@
       li.addEventListener('click', () => openFile(f));
       fileList.append(li);
     }
+    const cur = fileList.querySelector('.cursor');
+    if (cur) cur.scrollIntoView({ block: 'nearest' });
   }
 
   async function loadList() {
@@ -328,6 +362,7 @@
       if (id !== loadId) return false;
     }
     ed.load(f.content);
+    S.focus = 'editor';
     try { localStorage.setItem(LAST, f.name); } catch {}
     updateHeader(); renderList(); render(); focusEditor();
     msg('');
@@ -350,7 +385,7 @@
   }
 
   async function openFile(f) {
-    if (f === S.current) { focusEditor(); return true; }
+    if (f === S.current) { S.focus = 'editor'; renderList(); focusEditor(); return true; }
     if (!(await leaveCurrent())) return false;
     return showFile(f);
   }
@@ -394,7 +429,8 @@
     const base = raw.replace(/\.txt$/i, '').trim();
     if (!base || /[\/\\:*?"<>|]/.test(base) || base.startsWith('.')) { msg('Invalid file name', 'error'); return; }
     const name = base + '.txt';
-    if (S.files.some(f => f.name.toLowerCase() === name.toLowerCase())) { msg('A note with that name already exists', 'error'); return; }
+    const existing = S.files.find(f => f.name.toLowerCase() === name.toLowerCase());
+    if (existing) { openFile(existing); return; }
     const f = { name, sha: null, content: '', isNew: true };
     S.files.push(f); S.files.sort(byName);
     if (!(await openFile(f))) { S.files = S.files.filter(x => x !== f); renderList(); }
@@ -417,7 +453,11 @@
   }
 
   function onEx(s) {
+    const m = s.match(/^(?:new|n|e|edit)\s+(.+)$/);
+    if (m) { createNote(m[1]); return; }
     switch (s) {
+      case 'ls': case 'files': openPicker(); break;
+      case 'logout': $('#btnLogout').click(); break;
       case 'w': case 'write': save(); break;
       case 'q': case 'quit': case 'close':
         if (ed.dirty) msg('E37: No write since last change (add ! to override)', 'error'); else closeCurrent();
@@ -431,7 +471,97 @@
   }
 
   // ---- sidebar -----------------------------------------------------------
-  $('#btnNew').addEventListener('click', () => {
+  function syncSel() { S.sel = Math.max(0, S.files.indexOf(S.current)); }
+
+  function setSidebar(show) {
+    S.side = show; app.classList.toggle('no-side', !show);
+    try { localStorage.setItem(SIDE, show ? '1' : '0'); } catch {}
+  }
+  // Hidden -> show + focus tree. Visible & editor focused -> focus tree. Visible & tree focused -> hide.
+  // Nothing is fetched here: S.files is the cache, filled once at login/boot (or by the refresh button).
+  function toggleSidebar() {
+    if (!S.side) { setSidebar(true); S.focus = 'tree'; syncSel(); }
+    else if (S.focus === 'tree') { setSidebar(false); S.focus = 'editor'; }
+    else { S.focus = 'tree'; syncSel(); }
+    renderList(); focusEditor();
+  }
+
+  function treeKey(k) {
+    const n = S.files.length;
+    switch (k) {
+      case 'j': case 'ArrowDown': S.sel = Math.min(S.sel + 1, n - 1); break;
+      case 'k': case 'ArrowUp': S.sel = Math.max(S.sel - 1, 0); break;
+      case 'g': case 'Home': S.sel = 0; break;
+      case 'G': case 'End': S.sel = Math.max(n - 1, 0); break;
+      case 'Enter': case 'l': case 'o': openFromTree(); return;
+      case 'a': startNew(); return;
+      case 'd': if (S.files[S.sel]) deleteNote(S.files[S.sel]); return;
+      case 'Esc': S.focus = 'editor'; break;
+      case ':': ed.key(':'); break;
+      default: return;
+    }
+    renderList();
+  }
+  async function openFromTree() {
+    const f = S.files[S.sel]; if (!f) return;
+    if (!(await openFile(f))) { S.focus = 'tree'; renderList(); }
+  }
+
+  // ---- picker (Space Space) ---------------------------------------------
+  let pItems = [], pSel = 0;
+  // substring match ranks first (by position), then subsequence match; -1 = no match
+  function score(name, q) {
+    name = name.toLowerCase();
+    const i = name.indexOf(q); if (i >= 0) return i;
+    let p = 0; for (const ch of name) { if (ch === q[p]) p++; if (p === q.length) return 1000; }
+    return -1;
+  }
+  function pRender() {
+    const q = pInput.value.trim();
+    const lq = q.toLowerCase();
+    pItems = S.files.map(f => ({ f, s: lq ? score(f.name, lq) : 0 })).filter(x => x.s >= 0)
+      .sort((a, b) => a.s - b.s || byName(a.f, b.f)).map(x => x.f);
+    pSel = Math.max(0, Math.min(pSel, pItems.length - 1));
+    pList.replaceChildren();
+    if (!pItems.length) {
+      const li = document.createElement('li'); li.className = 'hint';
+      li.textContent = q ? `No match — Enter creates "${q.replace(/\.txt$/i, '')}.txt"` : 'No notes yet — type a name and press Enter to create one';
+      pList.append(li); return;
+    }
+    pItems.forEach((f, i) => {
+      const li = document.createElement('li'); li.textContent = f.name;
+      if (i === pSel) li.className = 'sel';
+      li.addEventListener('mousedown', e => { e.preventDefault(); pSel = i; pChoose(); });
+      pList.append(li);
+    });
+    const sel = pList.querySelector('.sel'); if (sel) sel.scrollIntoView({ block: 'nearest' });
+  }
+  function openPicker() {
+    if (!S.cfg) return;
+    pInput.value = ''; pSel = 0; picker.hidden = false; pRender(); pInput.focus();
+  }
+  function closePicker() { picker.hidden = true; focusEditor(); }
+  function pChoose() {
+    const f = pItems[pSel], q = pInput.value.trim();
+    closePicker();
+    if (f) openFile(f); else if (q) createNote(q);
+  }
+  pInput.addEventListener('input', () => { pSel = 0; pRender(); });
+  pInput.addEventListener('keydown', e => {
+    const ctrl = e.ctrlKey && !e.altKey;
+    const l = e.key.toLowerCase();
+    if (e.key === 'Escape' || (ctrl && l === '[')) { e.preventDefault(); closePicker(); }
+    else if (e.key === 'Enter') { e.preventDefault(); pChoose(); }
+    else if (e.key === 'ArrowDown' || (ctrl && (l === 'n' || l === 'j'))) { e.preventDefault(); pSel = Math.min(pSel + 1, pItems.length - 1); pRender(); }
+    else if (e.key === 'ArrowUp' || (ctrl && (l === 'p' || l === 'k'))) { e.preventDefault(); pSel = Math.max(pSel - 1, 0); pRender(); }
+  });
+  pInput.addEventListener('blur', () => { if (!picker.hidden) closePicker(); });
+  picker.addEventListener('mousedown', e => { if (e.target === picker) closePicker(); });
+
+  // ---- new note (sidebar "a", + button, or :new) -------------------------
+  $('#btnNew').addEventListener('click', startNew);
+  function startNew() {
+    if (!S.side) setSidebar(true);
     if (fileList.querySelector('.newrow')) return;
     const li = document.createElement('li'); li.className = 'newrow';
     const inp = document.createElement('input'); inp.placeholder = 'new-note.txt'; inp.spellcheck = false;
@@ -448,7 +578,7 @@
       else if (e.key === 'Escape') finish(false);
     });
     inp.addEventListener('blur', () => finish(false));
-  });
+  }
   $('#btnRefresh').addEventListener('click', async () => {
     try { await loadList(); msg('List refreshed', 'ok'); } catch (e) { msg(explain(e), 'error'); }
     focusEditor();
@@ -474,7 +604,9 @@
   function showApp() {
     login.hidden = true; app.hidden = false;
     repoLabel.textContent = S.cfg.repo + (S.cfg.folder ? '/' + S.cfg.folder : '') + ' · ' + S.cfg.branch;
-    renderList(); updateHeader(); render();
+    let hide = false; try { hide = localStorage.getItem(SIDE) === '0'; } catch {}
+    S.focus = 'editor'; setSidebar(!hide);
+    renderList(); updateHeader(); render(); focusEditor();
   }
 
   $('#loginForm').addEventListener('submit', async e => {
