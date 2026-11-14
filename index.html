@@ -50,6 +50,7 @@
     </div>
     <div id="repoLabel" class="repo"></div>
     <ul id="fileList"></ul>
+    <div id="treeHint" class="tree-hint" hidden><kbd>j</kbd><kbd>k</kbd> move · <kbd>⏎</kbd> open · <kbd>a</kbd> new · <kbd>d</kbd> delete · <kbd>Esc</kbd> back</div>
     <div class="side-foot"><button id="btnLogout" class="link">Log out</button></div>
   </aside>
 
@@ -62,8 +63,8 @@
     <div id="editor">
       <div id="scroll"><div id="doc"></div></div>
       <div id="empty" class="empty">
-        <div class="big">Pick a note or press <kbd>+</kbd></div>
-        <div>Type <kbd>:help</kbd> inside a note for the key list.</div>
+        <div class="big"><kbd>Space</kbd> <kbd>Space</kbd> find a note · <kbd>Space</kbd> <kbd>e</kbd> sidebar</div>
+        <div>In the sidebar press <kbd>a</kbd> to create a note. Type <kbd>:help</kbd> for all keys.</div>
       </div>
       <textarea id="sink" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="editor input"></textarea>
     </div>
@@ -76,6 +77,14 @@
       <span id="pos" class="pos"></span>
     </footer>
   </section>
+</div>
+
+<div id="picker" class="picker" hidden>
+  <div class="pbox">
+    <input id="pInput" placeholder="Find note…" spellcheck="false" autocomplete="off">
+    <ul id="pList"></ul>
+    <div class="phint"><kbd>↑</kbd><kbd>↓</kbd> / <kbd>Ctrl n</kbd><kbd>Ctrl p</kbd> move · <kbd>⏎</kbd> open · <kbd>Esc</kbd> close</div>
+  </div>
 </div>
 
 <dialog id="modal">
