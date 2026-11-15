@@ -1,37 +1,180 @@
-# vnotes
+Vimnix
 
-A tiny desktop-only notes site with vim keys. Notes are plain `.txt` files in a **private GitHub repo**; the site itself is static and runs on GitHub Pages. No server, no build step.
+A tiny, keyboard-first notes app inspired by Vim.
 
-## Setup
+Vimnix is a minimal desktop notes application that lets you create, edit, and manage plain text notes using familiar Vim-style keyboard commands.
 
-1. **Notes repo (private).** Create e.g. `notes` and initialise it with a README so the branch exists.
-2. **Token.** GitHub → Settings → Developer settings → Fine-grained tokens → Generate.
-   Repository access: *Only select repositories* → your notes repo.
-   Permissions: **Contents: Read and write** (Metadata: read is added automatically).
-3. **Site repo.** Put `index.html`, `style.css`, `vim.js`, `app.js` in a repo (e.g. `vnotes`), then Settings → Pages → deploy from the `main` branch, `/ (root)`.
-   Pages on the free plan needs this repo to be public — that's fine, it holds no secrets; your notes live in the other, private repo.
-4. Open the site, enter `owner/notes` and the token. They are saved in this browser's localStorage, so you only do this once. *Log out* wipes them.
+Your notes are stored as .txt files in your own private GitHub repository. The application itself is completely static and runs on GitHub Pages.
 
-## How it behaves
+No server. No build step. No unnecessary complexity.
 
-- Notes are saved to GitHub **only** when you save (`:w` or `Ctrl-S`). One API call per save, one per opened note (cached afterwards), one for the list.
-- Switching notes or logging out with unsaved changes asks: Save / Discard / Cancel.
-- Closing the tab with unsaved changes triggers the browser's own "Leave site?" prompt (browsers don't allow custom dialogs there).
-- If a note was changed on GitHub since you opened it, saving fails with a conflict message; `:e!` reloads it.
-- New notes exist locally until the first save. `Refresh` (↻) re-reads the list.
-- Optional **Folder** on the login form keeps notes in a subfolder of the repo.
+Features
+Vim-style editing — Navigate and edit notes using familiar Vim motions and commands.
+Plain text storage — Notes are stored as ordinary .txt files.
+Private GitHub storage — Your notes live in your own private repository.
+Fuzzy note picker — Quickly find and open notes with Space Space.
+Keyboard-first navigation — Manage notes without relying on a mouse.
+Sidebar navigation — Browse, create, and delete notes.
+Conflict detection — Prevents accidentally overwriting changes made elsewhere.
+Unsaved change protection — Prompts before switching notes or logging out.
+Lightweight architecture — Static HTML, CSS, and JavaScript hosted on GitHub Pages.
+Screenshots
 
-## Keys
+<!-- Add your screenshots here -->
 
-Everything works from the keyboard, with or without a note open (`:help` lists the keys).
+Login
 
-- `Space Space` — fuzzy note picker (`↑↓` or `Ctrl-n/p`, `Enter` opens; if nothing matches, `Enter` creates that note).
-- `Space e` — show the sidebar and focus it; press again to hide it. The file list is cached in memory, so toggling never re-fetches (use ↻ to re-read it).
-- In the sidebar: `j k g G` move, `Enter` open, `a` new note, `d` delete, `Esc` back to the editor.
-- `:new name` / `:e name` create (or open) `name.txt`; `:ls` opens the picker.
+!Vimnix Login
 
-Editor keys, short version: `h j k l w b e 0 ^ $ gg G { }`, `i a I A o O`, `x X D C s S J r`, `d y c` + motion (`dw`, `d$`, `cw`, `ciw`, `3dd`, `yy`), `p P`, `u` / `Ctrl-r`, `v V` + `d y c`, `/text` `n N`, `:w :q :wq :q! :e! :12`.
+Editor
 
-## Security notes
+!Vimnix Editor
 
-The token lives in localStorage, so use it only on your own machine and keep it scoped to the one notes repo with just Contents access. If it leaks, revoke it in GitHub settings.
+Help
+
+!Vimnix Help
+
+Getting Started
+1. Create a private notes repository
+
+Create a GitHub repository for your notes.
+
+For example:
+
+personal-notes
+
+Initialize it with a README so the default branch exists.
+
+2. Generate a GitHub token
+
+Go to:
+
+GitHub → Settings → Developer settings → Fine-grained personal access tokens.
+
+Generate a token with the following configuration:
+
+Repository access: Only select repositories.
+Select your private notes repository.
+Repository permissions: Contents — Read and write.
+Metadata — Read-only (added automatically).
+
+Keep your token private.
+
+3. Deploy Vimnix
+
+Put the application files into a GitHub repository:
+
+index.html
+style.css
+vim.js
+app.js
+
+Enable GitHub Pages:
+
+Open your site repository settings.
+Navigate to Pages.
+Select Deploy from a branch.
+Choose the main branch.
+Select the root directory.
+
+Your application will be available through GitHub Pages.
+
+The site repository must be public when using the free GitHub Pages plan. It contains no secrets.
+
+4. Connect your notes repository
+
+Open Vimnix and enter:
+
+GitHub owner
+Notes repository name
+Personal access token
+Optional folder
+
+Your connection details are saved in the browser's localStorage so you only need to enter them once.
+
+Logging out removes the saved credentials.
+
+Keyboard Shortcuts
+General
+Shortcut	Action
+Space Space	Open fuzzy note picker
+Space e	Toggle sidebar
+:help	Show keyboard reference
+:ls	Open note picker
+:new name	Create a note
+:e name	Open or create a note
+Sidebar
+Shortcut	Action
+j / k	Move down / up
+g / G	First / last item
+Enter	Open selected note
+a	Create new note
+d	Delete note
+Esc	Return to editor
+Editing
+
+Vimnix supports familiar Vim motions and editing commands, including:
+
+h j k l — Cursor movement.
+w b e — Word navigation.
+0 ^ $ — Line navigation.
+gg G — First and last line.
+i a I A — Insert mode.
+o O — Open a line below or above.
+x X D C — Delete and change operations.
+dd yy p P — Delete, yank, and paste.
+u Ctrl-r — Undo and redo.
+v V — Visual selection.
+/text n N — Search.
+Ex Commands
+Command	Action
+:w	Save note
+:q	Close note
+:wq	Save and close
+:q!	Close without saving
+:e!	Reload note
+:12	Jump to line 12
+
+Ctrl-S also saves the current note.
+
+How Storage Works
+
+Vimnix communicates directly with the GitHub API.
+
+The notes list is fetched when needed.
+Opened notes are cached in memory.
+Changes are saved only when you explicitly save.
+Each save creates a GitHub repository update.
+New notes remain local until their first save.
+
+There is no application backend or separate database.
+
+Security
+
+Your GitHub token is stored in the browser's localStorage.
+
+For security:
+
+Use Vimnix only on your own trusted machine.
+Restrict the token to your notes repository.
+Grant only Contents read and write permissions.
+Never share your token.
+Revoke the token immediately if it is exposed.
+
+Logging out removes the locally stored credentials.
+
+Built With
+HTML
+CSS
+JavaScript
+GitHub REST API
+GitHub Pages
+Philosophy
+
+Vimnix is built around a simple idea:
+
+Your notes should belong to you, and your tools should stay out of your way.
+
+No accounts to create, no complicated infrastructure, and no unnecessary features.
+
+Just plain text, Vim keys, and your own private GitHub repository.
