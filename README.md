@@ -20,7 +20,16 @@ Unsaved change protection — Prompts before switching notes or logging out.
 Lightweight architecture — Static HTML, CSS, and JavaScript hosted on GitHub Pages.
 Screenshots
 
-<!-- Add your screenshots here -->
+## Screenshots
+
+### Login
+![Vimnix Login](src/login.png)
+
+### Editor
+![Vimnix Editor](src/editor.png)
+
+### Help & Keyboard Shortcuts
+![Vimnix Help](src/help.png)
 
 Login
 
