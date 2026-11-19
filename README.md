@@ -48,8 +48,8 @@ Generate a token with the following configuration:
 - **Repository access:** Only select repositories
   - Select your private notes repository.
 - **Repository permissions:**
-  - Contents — **Read and write**
-  - Metadata — Read-only (added automatically)
+  - Contents - **Read and write**
+  - Metadata - Read-only (added automatically)
 
 > Keep your token private.
 
