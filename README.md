@@ -10,15 +10,15 @@ Your notes are stored as `.txt` files in your own private GitHub repository. The
 
 ## Features
 
-- **Vim-style editing** — Navigate and edit notes using familiar Vim motions and commands.
-- **Plain text storage** — Notes are stored as ordinary `.txt` files.
-- **Private GitHub storage** — Your notes live in your own private repository.
-- **Fuzzy note picker** — Quickly find and open notes with `Space Space`.
-- **Keyboard-first navigation** — Manage notes without relying on a mouse.
-- **Sidebar navigation** — Browse, create, and delete notes.
-- **Conflict detection** — Prevents accidentally overwriting changes made elsewhere.
-- **Unsaved change protection** — Prompts before switching notes or logging out.
-- **Lightweight architecture** — Static HTML, CSS, and JavaScript hosted on GitHub Pages.
+- **Vim-style editing** - Navigate and edit notes using familiar Vim motions and commands.
+- **Plain text storage** - Notes are stored as ordinary `.txt` files.
+- **Private GitHub storage** - Your notes live in your own private repository.
+- **Fuzzy note picker** - Quickly find and open notes with `Space Space`.
+- **Keyboard-first navigation** - Manage notes without relying on a mouse.
+- **Sidebar navigation** - Browse, create, and delete notes.
+- **Conflict detection** - Prevents accidentally overwriting changes made elsewhere.
+- **Unsaved change protection** - Prompts before switching notes or logging out.
+- **Lightweight architecture** - Static HTML, CSS, and JavaScript hosted on GitHub Pages.
 
 ## Screenshots
 
